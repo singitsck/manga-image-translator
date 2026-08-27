@@ -15,6 +15,7 @@ from manga_translator import MangaTranslator
 SAFE_PICKLE_MODULES = frozenset({
     'builtins',
     'collections',
+    'fractions',
     'numpy',
     'numpy.core.multiarray',
     'numpy.dtype',

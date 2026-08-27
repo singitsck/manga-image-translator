@@ -263,7 +263,10 @@ def start_translator_client_proc(host: str, port: int, nonce: str, params: Names
     if getattr(params, 'pre_dict', None):
         cmds.extend(['--pre-dict', params.pre_dict])
     if getattr(params, 'post_dict', None):
-        cmds.extend(['--post-dict', params.post_dict])       
+        cmds.extend(['--post-dict', params.post_dict])
+    context_size = getattr(params, 'context_size', 0)
+    if context_size:
+        cmds.extend(['--context-size', str(context_size)])
     base_path = os.path.dirname(os.path.abspath(__file__))
     parent = os.path.dirname(base_path)
     proc = subprocess.Popen(cmds, cwd=parent)

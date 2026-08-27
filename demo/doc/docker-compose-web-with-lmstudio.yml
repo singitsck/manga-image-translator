@@ -1,0 +1,54 @@
+# 對應 start-lmstudio-local.sh 的 Docker 版
+# 主翻譯：MiniMax（.env）
+# Fallback：主機上的 LM Studio（host.docker.internal:1234）
+#
+# 啟動前：
+#   1. 專案根目錄有 .env（MiniMax key / model）
+#   2. LM Studio Local Server 已開，並載入 OPENAI_FALLBACK_MODEL
+#   3. 若本機 python 服務佔用 5003，先停掉
+#
+# 啟動：
+#   ./start-docker.sh
+#   或：docker compose -f demo/doc/docker-compose-web-with-lmstudio.yml up
+#
+# 注意（Mac）：官方映像是 linux/amd64 + CUDA，在 Apple Silicon 上是模擬跑 CPU，
+#             偵測/OCR/修復會比本機 --use-gpu（MPS）慢很多。
+
+services:
+  manga_image_translator:
+    image: zyddnys/manga-image-translator:main
+    container_name: manga_image_translator_lmstudio
+    entrypoint: python
+    command: >
+      server/main.py
+      --verbose
+      --start-instance
+      --host=0.0.0.0
+      --port=5003
+      --nonce None
+      --context-size ${CONTEXT_SIZE:-5}
+    env_file:
+      - ../../.env
+    volumes:
+      - ../../result:/app/result
+      - ../../dict:/app/dict
+      # 本機改過的邏輯掛進容器
+      - ../../manga_translator/mode/share.py:/app/manga_translator/mode/share.py
+      - ../../manga_translator/translators/chatgpt.py:/app/manga_translator/translators/chatgpt.py
+      - ../../manga_translator/detection/__init__.py:/app/manga_translator/detection/__init__.py
+      - ../../server/main.py:/app/server/main.py
+      - ../../server/args.py:/app/server/args.py
+      - ../../server/request_extraction.py:/app/server/request_extraction.py
+    ports:
+      - 5003:5003
+    ipc: host
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      MT_WEB_NONCE: "None"
+      # 覆蓋 .env 裡的 127.0.0.1：容器內必須用 host.docker.internal 連主機 LM Studio
+      OPENAI_FALLBACK_API_BASE: "http://host.docker.internal:1234/v1"
+      OPENAI_FALLBACK_API_KEY: "lm-studio"
+      OPENAI_FALLBACK_MODEL: "${OPENAI_FALLBACK_MODEL:-google/gemma-4-12b-qat}"
+      SKIP_LANG: "${SKIP_LANG:-CHS,CHT}"
+      CONTEXT_SIZE: "${CONTEXT_SIZE:-5}"

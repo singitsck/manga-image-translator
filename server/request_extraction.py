@@ -1,6 +1,7 @@
 import asyncio
 import builtins
 import io
+import os
 import re
 from base64 import b64decode
 from typing import Union
@@ -14,6 +15,17 @@ from fastapi.responses import StreamingResponse
 from manga_translator import Config
 from server.myqueue import task_queue, wait_in_queue, QueueElement, BatchQueueElement
 from server.streaming import notify, stream
+
+# App 沒有 skip_lang 設定時，可用環境變數強制略過已是中文的文字
+# 例如 SKIP_LANG=CHS,CHT（只翻日文/英文等其他語言）
+
+
+def apply_local_defaults(config: Config) -> Config:
+    skip_lang = os.getenv('SKIP_LANG', 'CHS,CHT')
+    if skip_lang and not config.translator.skip_lang:
+        config.translator.skip_lang = skip_lang
+    return config
+
 
 class TranslateRequest(BaseModel):
     """This request can be a multipart or a json request"""
@@ -51,6 +63,7 @@ async def to_pil_image(image: Union[str, bytes]) -> Image.Image:
 
 
 async def get_ctx(req: Request, config: Config, image: str|bytes):
+    config = apply_local_defaults(config)
     image = await to_pil_image(image)
 
     task = QueueElement(req, image, config, 0)
@@ -59,6 +72,7 @@ async def get_ctx(req: Request, config: Config, image: str|bytes):
     return await wait_in_queue(task, None)
 
 async def while_streaming(req: Request, transform, config: Config, image: bytes | str):
+    config = apply_local_defaults(config)
     image = await to_pil_image(image)
 
     task = QueueElement(req, image, config, 0)
@@ -74,6 +88,7 @@ async def while_streaming(req: Request, transform, config: Config, image: bytes 
 
 async def get_batch_ctx(req: Request, config: Config, images: list[str|bytes], batch_size: int = 4):
     """Process batch translation request"""
+    config = apply_local_defaults(config)
     # Convert images to PIL Image objects
     pil_images = []
     for img in images:

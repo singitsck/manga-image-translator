@@ -78,8 +78,21 @@ class OpenAITranslator(ConfigGPT, CommonTranslator):
         else:
             self.console = Console()  
         self.prev_context = ""
-        # 可选的回退模型（通过环境变量 OPENAI_FALLBACK_MODEL 指定）
+        # 可选的回退：默认只换模型；若设置 OPENAI_FALLBACK_API_BASE 则改打另一端点（如 LM Studio）
         self._fallback_model = os.getenv("OPENAI_FALLBACK_MODEL")
+        self._fallback_api_base = os.getenv("OPENAI_FALLBACK_API_BASE")
+        self._fallback_api_key = os.getenv("OPENAI_FALLBACK_API_KEY", "lm-studio")
+        self._fallback_client = None
+        if self._fallback_api_base and openai is not None:
+            self._fallback_client = openai.AsyncOpenAI(
+                api_key=self._fallback_api_key or "lm-studio",
+                base_url=self._fallback_api_base,
+            )
+            if not self._fallback_model:
+                self._fallback_model = os.getenv("CUSTOM_OPENAI_MODEL") or "google/gemma-4-12b-qat"
+            self.logger.info(
+                f"API fallback ready: {self._fallback_api_base} model={self._fallback_model}"
+            )
 
     def set_prev_context(self, text: str = ""):
         self.prev_context = text or ""     
@@ -174,9 +187,43 @@ class OpenAITranslator(ConfigGPT, CommonTranslator):
 
         return translations
 
+    @staticmethod
+    def _is_content_filter_error(err: Exception) -> bool:
+        """MiniMax / 云端对 R18 等内容常回 422 new_sensitive，重试无意义。"""
+        text = str(err).lower()
+        markers = (
+            "new_sensitive",
+            "unprocessable_entity",
+            "content_filter",
+            "content policy",
+            "sensitive",
+            "422",
+        )
+        return any(m in text for m in markers)
+
+    @staticmethod
+    def _is_soft_refusal(text: str) -> bool:
+        """云端回 200 但正文是拒答说明（通常没有 <|n|>）。"""
+        if not text or not text.strip():
+            return False
+        markers = (
+            "无法翻译", "無法翻譯", "我无法", "我無法", "很抱歉",
+            "不能协助", "不能協助", "不能翻译", "不能翻譯",
+            "不在我的翻译", "不适宜", "不適宜",
+            "i cannot", "i can't", "cannot assist", "can't assist",
+            "against my", "content policy", "not able to",
+        )
+        lower = text.lower()
+        return any(m in text or m in lower for m in markers)
+
+    @staticmethod
+    def _has_indexed_output(text: str) -> bool:
+        return bool(re.search(r'<\|\s*\d+\s*\|?>', text or ''))
+
     async def _try_fallback_model(self, to_lang: str, prompt: str, batch_queries: List[str]) -> tuple[bool, List[str]]:
         """
-        尝试使用回退模型进行翻译，默认重试3次
+        尝试使用回退模型进行翻译，默认重试3次。
+        若配置了 OPENAI_FALLBACK_API_BASE，会改打该端点（例如本机 LM Studio）。
         Returns: (success: bool, results: List[str])
         """
         if not self._fallback_model:
@@ -204,10 +251,16 @@ class OpenAITranslator(ConfigGPT, CommonTranslator):
             from importlib import import_module
             keys_mod = import_module("manga_translator.translators.keys")
             original_model_const = getattr(keys_mod, "OPENAI_MODEL", None)
+            original_client = self.client
 
             try:
                 # 临时替换常量，使 _request_with_retry 使用回退模型
                 setattr(keys_mod, "OPENAI_MODEL", self._fallback_model)
+                if self._fallback_client is not None:
+                    self.client = self._fallback_client
+                    self.logger.warning(
+                        f"Switched API client to fallback: {self._fallback_api_base}"
+                    )
 
                 # 若当前处于 ChatGPT2StageTranslator 第二阶段，需要同步切换 stage2_model
                 orig_stage2 = getattr(self, "stage2_model", None)
@@ -261,7 +314,8 @@ class OpenAITranslator(ConfigGPT, CommonTranslator):
                     self.logger.error(f"All fallback model requests failed")
 
             finally:
-                # 恢复常量与 stage2_model
+                # 恢复常量、client 与 stage2_model
+                self.client = original_client
                 if original_model_const is not None:
                     setattr(keys_mod, "OPENAI_MODEL", original_model_const)
                 if getattr(self, "_is_stage2_translation", False) and hasattr(self, "stage2_model") and orig_stage2 is not None:
@@ -312,7 +366,23 @@ class OpenAITranslator(ConfigGPT, CommonTranslator):
             try:  
                 # 发起请求  
                 # Send request  
-                response_text = await self._request_with_retry(to_lang, prompt)  
+                response_text = await self._request_with_retry(to_lang, prompt)
+
+                # 软拒答 / 无 <|n|>：立刻改打 LM Studio，不要空转重试 3 次
+                if batch_queries and not self._has_indexed_output(response_text):
+                    reason = "soft refusal" if self._is_soft_refusal(response_text) else "no <|n|> indices"
+                    self.logger.warning(
+                        f"Primary model returned {reason}. Switching to fallback immediately "
+                        f"(skip remaining MiniMax retries)."
+                    )
+                    success, fallback_results = await self._try_fallback_model(to_lang, prompt, batch_queries)
+                    if success:
+                        for i, result in enumerate(fallback_results):
+                            partial_results[i] = result
+                        self.logger.info("Fallback model succeeded after soft-refusal / missing indices.")
+                        return True, partial_results
+                    self.logger.error("Fallback also failed after soft-refusal / missing indices.")
+                    break
 
                 # 解析响应
                 # Parse response
@@ -512,7 +582,18 @@ class OpenAITranslator(ConfigGPT, CommonTranslator):
             except Exception as e:  
                 self.logger.warning(  
                     f"Batch translate attempt {attempt+1}/{max_attempts} failed with error: {str(e)}"  
-                )  
+                )
+                # 敏感内容拦截：立刻改打 fallback，避免同一批内容反复打 MiniMax / 无意义拆批
+                if self._is_content_filter_error(e):
+                    self.logger.warning("Content filter hit — switching to fallback API immediately.")
+                    success, fallback_results = await self._try_fallback_model(to_lang, prompt, batch_queries)
+                    if success:
+                        for i, result in enumerate(fallback_results):
+                            partial_results[i] = result
+                        self.logger.info("Fallback model succeeded after content-filter error.")
+                        return True, partial_results
+                    self.logger.error("Fallback also failed after content-filter error.")
+                    break
                 if attempt < max_attempts - 1:  
                     await asyncio.sleep(1)  
                 else:
@@ -644,6 +725,10 @@ class OpenAITranslator(ConfigGPT, CommonTranslator):
                 await asyncio.sleep(2)
 
             except openai.APIError as e:
+                # 内容审核 / 422 sensitive：不要空转重试，直接抛出让上层走 LM Studio fallback
+                if self._is_content_filter_error(e):
+                    self.logger.warning(f"Content-filter API error, skip MiniMax retries: {e}")
+                    raise
                 # 服务器错误 => 重试
                 server_error_attempt += 1
                 if server_error_attempt > self._RETRY_ATTEMPTS:
