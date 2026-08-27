@@ -89,7 +89,7 @@ class OpenAITranslator(ConfigGPT, CommonTranslator):
                 base_url=self._fallback_api_base,
             )
             if not self._fallback_model:
-                self._fallback_model = os.getenv("CUSTOM_OPENAI_MODEL") or "google/gemma-4-12b-qat"
+                self._fallback_model = os.getenv("CUSTOM_OPENAI_MODEL") or "google/gemma-4-e4b"
             self.logger.info(
                 f"API fallback ready: {self._fallback_api_base} model={self._fallback_model}"
             )
