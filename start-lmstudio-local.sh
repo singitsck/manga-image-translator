@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
 # 本機啟動 manga-image-translator（Apple MPS + .env 內的翻譯 API）
+# Python 環境優先順序：.conda-env (Miniforge) > venv
 set -euo pipefail
 cd "$(dirname "$0")"
-source venv/bin/activate
+
+if [[ -x ".conda-env/bin/python" ]]; then
+  # shellcheck disable=SC1091
+  source ./activate-miniforge.sh
+elif [[ -f "venv/bin/activate" ]]; then
+  # shellcheck disable=SC1091
+  source venv/bin/activate
+else
+  echo "找不到 Python 環境。請先執行: ./setup-miniforge.sh" >&2
+  exit 1
+fi
 
 # 若 .env 存在會由程式自動載入；這裡再保險 export 一次
 set -a

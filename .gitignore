@@ -43,6 +43,7 @@ MANIFEST
 .history
 /venv
 .venv/
+.conda-env/
 
 # Input and Output
 /input/
