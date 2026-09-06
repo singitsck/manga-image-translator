@@ -1,0 +1,25 @@
+# Miniforge / conda-forge 環境（Apple Silicon MPS 建議用此檔建立）
+#
+# 建立（專案內隔離，目錄 .conda-env）：
+#   ./setup-miniforge.sh
+#
+# 或手動：
+#   conda env create --prefix ./.conda-env -f environment.yml
+#   conda activate ./.conda-env
+#   pip install -r requirements-mac.txt   # macOS
+#   pip install -r requirements.txt       # 其他平台
+
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  # conda-forge 的 PyTorch 在 macOS 上支援 MPS
+  - pytorch
+  - torchvision
+  - numpy=1.26.4
+  # 部分 pip 套件編譯原生擴充時需要
+  - cmake
+  - pkg-config
+  - freetype
+  - libjpeg-turbo
