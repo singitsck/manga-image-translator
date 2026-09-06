@@ -48,6 +48,8 @@ def parse_arguments():
     parser.add_argument('--post-dict', default=None, type=file_path, help='Path to the post-translation dictionary file')
     parser.add_argument('--context-size', default=int(os.getenv('CONTEXT_SIZE', '2')), type=int,
                         help='Pages of context for ChatGPT translator (default: 2, 0 to disable)')
+    parser.add_argument('--num-workers', default=int(os.getenv('NUM_WORKERS', '1')), type=int,
+                        help='Number of shared translator workers for parallel page processing (default: 1)')
     g = parser.add_mutually_exclusive_group()
     g.add_argument('--use-gpu', action='store_true', help='Turn on/off gpu (auto switch between mps and cuda)')
     g.add_argument('--use-gpu-limited', action='store_true', help='Turn on/off gpu (excluding offline translator)')

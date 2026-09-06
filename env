@@ -1,0 +1,28 @@
+# MiniMax M3 (OpenAI-compatible)
+OPENAI_API_KEY=sk-cp-jklMrpESzsHn0YW91DabTz7BnvfL7AOUk6DbrHEroy_BKX9cEhfhpoHJYYUy0-7gG5-ppM2-IGUt-hKKzuxXr9yJvktMSbL6InPHgjCyQx97kDVXkzG0w6s
+OPENAI_API_BASE=https://api.minimaxi.com/v1
+OPENAI_MODEL=MiniMax-M3
+OPENAI_HTTP_PROXY=
+OPENAI_GLOSSARY_PATH=./dict/mit_glossary.txt
+
+# custom_openai 同步指向 MiniMax（若 App 選這個也可用）
+CUSTOM_OPENAI_API_KEY=sk-cp-jklMrpESzsHn0YW91DabTz7BnvfL7AOUk6DbrHEroy_BKX9cEhfhpoHJYYUy0-7gG5-ppM2-IGUt-hKKzuxXr9yJvktMSbL6InPHgjCyQx97kDVXkzG0w6s
+CUSTOM_OPENAI_API_BASE=https://api.minimaxi.com/v1
+CUSTOM_OPENAI_MODEL=MiniMax-M3
+CUSTOM_OPENAI_MODEL_CONF=
+
+# App 沒有「跳過語言」選項時，由伺服器強制略過中文（只翻日文/英文等）
+SKIP_LANG=CHS,CHT
+
+# chatgpt 跨頁上下文頁數（0=關閉）
+CONTEXT_SIZE=5
+
+# MiniMax 失敗（含 422 new_sensitive）時改打本機 LM Studio
+OPENAI_FALLBACK_API_BASE=http://127.0.0.1:4321/v1
+OPENAI_FALLBACK_PORT=4321
+OPENAI_FALLBACK_API_KEY=lm-studio
+OPENAI_FALLBACK_MODEL=sakura-14b-qwen2.5-v1.0
+
+# Parallel translator workers (each loads models; RAM x N)
+NUM_WORKERS=2
+

@@ -242,11 +242,14 @@ def generate_nonce():
     return secrets.token_hex(16)
 
 def start_translator_client_proc(host: str, port: int, nonce: str, params: Namespace):
+    # Workers must be reachable from the web process; 0.0.0.0 is not a valid client target.
+    register_ip = '127.0.0.1' if host in ('0.0.0.0', '::', '[::]') else host
+    bind_host = host
     cmds = [
         sys.executable,
         '-m', 'manga_translator',
         'shared',
-        '--host', host,
+        '--host', bind_host,
         '--port', str(port),
         '--nonce', nonce,
     ]
@@ -270,15 +273,7 @@ def start_translator_client_proc(host: str, port: int, nonce: str, params: Names
     base_path = os.path.dirname(os.path.abspath(__file__))
     parent = os.path.dirname(base_path)
     proc = subprocess.Popen(cmds, cwd=parent)
-    executor_instances.register(ExecutorInstance(ip=host, port=port))
-
-    def handle_exit_signals(signal, frame):
-        proc.terminate()
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, handle_exit_signals)
-    signal.signal(signal.SIGTERM, handle_exit_signals)
-
+    executor_instances.register(ExecutorInstance(ip=register_ip, port=port))
     return proc
 
 def prepare(args):
@@ -287,12 +282,30 @@ def prepare(args):
         nonce = os.getenv('MT_WEB_NONCE', generate_nonce())
     else:
         nonce = args.nonce
+    procs = []
     if args.start_instance:
-        return start_translator_client_proc(args.host, args.port + 1, nonce, args)
+        num_workers = max(1, int(getattr(args, 'num_workers', 1) or 1))
+        for i in range(num_workers):
+            worker_port = args.port + 1 + i
+            print(f"Starting translator worker {i + 1}/{num_workers} on port {worker_port}")
+            procs.append(start_translator_client_proc(args.host, worker_port, nonce, args))
+
+        def handle_exit_signals(signum, frame):
+            for p in procs:
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
+            sys.exit(0)
+
+        signal.signal(signal.SIGINT, handle_exit_signals)
+        signal.signal(signal.SIGTERM, handle_exit_signals)
+        return procs
     folder_name= "upload-cache"
     if os.path.exists(folder_name):
         shutil.rmtree(folder_name)
     os.makedirs(folder_name)
+    return procs
 
 @app.post("/simple_execute/translate_batch", tags=["internal-api"])
 async def simple_execute_batch(req: Request, data: BatchTranslateRequest):
@@ -395,10 +408,13 @@ if __name__ == '__main__':
 
     args = parse_arguments()
     args.start_instance = True
-    proc = prepare(args)
+    procs = prepare(args)
     print("Nonce: "+nonce)
     try:
         uvicorn.run(app, host=args.host, port=args.port)
     except Exception:
-        if proc:
-            proc.terminate()
+        for proc in (procs or []):
+            try:
+                proc.terminate()
+            except Exception:
+                pass

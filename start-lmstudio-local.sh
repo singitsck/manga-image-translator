@@ -12,8 +12,9 @@ set +a
 
 # CONTEXT_SIZE：帶入前幾頁作為翻譯上下文（僅 chatgpt / chatgpt_2stage 有效）
 CONTEXT_SIZE="${CONTEXT_SIZE:-5}"
+NUM_WORKERS="${NUM_WORKERS:-2}"
 
-echo "Translator API: ${OPENAI_API_BASE:-unset} model=${OPENAI_MODEL:-unset} context_size=${CONTEXT_SIZE}"
+echo "Translator API: ${OPENAI_API_BASE:-unset} model=${OPENAI_MODEL:-unset} context_size=${CONTEXT_SIZE} workers=${NUM_WORKERS}"
 
 exec python -u server/main.py \
   --verbose \
@@ -22,4 +23,5 @@ exec python -u server/main.py \
   --port=5003 \
   --nonce None \
   --use-gpu \
-  --context-size "${CONTEXT_SIZE}"
+  --context-size "${CONTEXT_SIZE}" \
+  --num-workers "${NUM_WORKERS}"

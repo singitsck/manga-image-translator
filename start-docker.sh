@@ -17,8 +17,9 @@ source .env
 set +a
 
 CONTEXT_SIZE="${CONTEXT_SIZE:-5}"
+NUM_WORKERS="${NUM_WORKERS:-2}"
 echo "Docker translator: base=${OPENAI_API_BASE:-unset} model=${OPENAI_MODEL:-unset}"
-echo "Fallback LM Studio: host.docker.internal:1234 model=${OPENAI_FALLBACK_MODEL:-unset} context_size=${CONTEXT_SIZE}"
+echo "Fallback LM Studio: host.docker.internal:${OPENAI_FALLBACK_PORT:-4321} model=${OPENAI_FALLBACK_MODEL:-unset} context_size=${CONTEXT_SIZE} workers=${NUM_WORKERS}"
 echo "注意：Mac Docker 為 CPU（無 MPS），影像處理通常比 ./start-lmstudio-local.sh 慢"
 
 # 避免本機 python 服務佔埠

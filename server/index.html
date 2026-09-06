@@ -484,8 +484,22 @@
           <div class="flex items-center justify-between mb-4">
             <h3 class="text-lg font-semibold text-gray-800">
               Translation Queue ({{ queuedImages.length }})
+              <span class="ml-2 text-sm font-normal text-gray-500">
+                active {{ activeTranslationCount }}/{{ maxConcurrent }}
+              </span>
             </h3>
-            <div class="flex space-x-2">
+            <div class="flex items-center space-x-2">
+              <label class="text-sm text-gray-600 flex items-center gap-1">
+                Parallel
+                <select v-model.number="maxConcurrent"
+                        @change="onMaxConcurrentChange"
+                        class="border rounded px-2 py-1 text-sm">
+                  <option :value="1">1</option>
+                  <option :value="2">2</option>
+                  <option :value="3">3</option>
+                  <option :value="4">4</option>
+                </select>
+              </label>
               <button @click="skipCurrentTranslation"
                       class="px-3 py-1 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors">
                 Skip Current
@@ -773,6 +787,9 @@
         finishedImages: [],
         showGallery: false,
         selectedFiles: [], // Store multiple selected files before adding to queue
+        // How many pages to translate at once (should match server --num-workers)
+        maxConcurrent: Number(localStorage.getItem('manga-translator-max-concurrent') || 2),
+        processingStatuses: ['processing', 'upload', 'pending', 'detection', 'ocr', 'mask-generation', 'inpainting', 'upscaling', 'translating', 'rendering'],
         
         // Gallery modal
         selectedImage: null,
@@ -853,7 +870,23 @@
         maskDilationOffset: 30,
         inpainter: "lama_large",
 
-        uploadController: null,
+        uploadController: null, // legacy; per-item abortController is preferred
+
+        get activeTranslationCount() {
+          return this.queuedImages.filter(item => this.processingStatuses.includes(item.status)).length;
+        },
+
+        fillTranslationSlots() {
+          while (this.activeTranslationCount < this.maxConcurrent) {
+            const nextIndex = this.queuedImages.findIndex(item => item.status === 'queued');
+            if (nextIndex === -1) break;
+            this.queuedImages[nextIndex] = {
+              ...this.queuedImages[nextIndex],
+              status: 'processing'
+            };
+            this.processTranslation(this.queuedImages[nextIndex]);
+          }
+        },
 
         // Settings change handlers for auto-saving
         onSettingChange() {
@@ -990,21 +1023,7 @@
           });
           
           console.log(`Queue now has ${this.queuedImages.length} items`);
-          
-          // If nothing is currently processing, start the first one
-          const processingSteps = ['upload', 'pending', 'detection', 'ocr', 'mask-generation', 'inpainting', 'upscaling', 'translating', 'rendering'];
-          const isCurrentlyTranslating = this.queuedImages.some(item =>
-            processingSteps.includes(item.status)
-          );
-          
-          if (!isCurrentlyTranslating && this.queuedImages.length > 0) {
-            // Start processing the first queued item
-            const firstQueuedIndex = this.queuedImages.findIndex(item => item.status === 'queued');
-            if (firstQueuedIndex !== -1) {
-              this.queuedImages[firstQueuedIndex].status = 'processing';
-              this.processTranslation(this.queuedImages[firstQueuedIndex]);
-            }
-          }
+          this.fillTranslationSlots();
         },
 
         // Batch upload functions
@@ -1053,20 +1072,21 @@
           const itemIndex = this.queuedImages.findIndex(img => img.id === id);
           if (itemIndex !== -1) {
             const item = this.queuedImages[itemIndex];
+            const wasActive = this.processingStatuses.includes(item.status);
             
-            // If it's currently processing, abort the translation
-            if (item.status === 'processing') {
-              this.uploadController?.abort();
+            // If it's currently processing, abort only this item
+            if (wasActive) {
+              item.abortController?.abort();
             }
             
             // Remove the item from queue
             this.queuedImages.splice(itemIndex, 1);
             
-            // If we removed a processing item, start the next one
-            if (item.status === 'processing') {
+            // Free a slot for the next queued page
+            if (wasActive) {
               setTimeout(() => {
-                this.processNextInQueue();
-              }, 500);
+                this.fillTranslationSlots();
+              }, 200);
             }
           }
         },
@@ -1154,59 +1174,28 @@
           // Clear any finished items from queue
           this.clearFinishedItems();
           
-          const currentFile = this.file;
-          
-          // Check if something is actually currently translating (has a real processing step status)
-          const processingSteps = ['upload', 'pending', 'detection', 'ocr', 'mask-generation', 'inpainting', 'upscaling', 'translating', 'rendering'];
-          const isCurrentlyTranslating = this.queuedImages.some(item => 
-            processingSteps.includes(item.status)
-          );
-          console.log('Currently translating:', isCurrentlyTranslating);
-          console.log('Current queue statuses:', this.queuedImages.map(item => ({ id: item.id, status: item.status })));
-          
-          if (isCurrentlyTranslating) {
-            // Add to back of queue with 'queued' status
-            const queuedImage = {
-              id: Date.now() + Math.random(),
-              file: currentFile,
-              addedAt: new Date(),
-              status: 'queued'  // Explicitly set as queued
-            };
-            this.queuedImages.push(queuedImage);
-            this.file = null; // Clear current file
-            console.log('Added image to queue with status:', queuedImage.status);
-          } else {
-            // Start translating immediately with 'processing' status
-            const queuedImage = {
-              id: Date.now() + Math.random(),
-              file: currentFile,
-              addedAt: new Date(),
-              status: 'processing'  // This one will be processing
-            };
-            this.queuedImages.push(queuedImage);
-            this.file = null; // Clear current file
-            
-            console.log('Starting translation with status:', queuedImage.status);
-            // Start the translation process
-            this.processTranslation(queuedImage);
-          }
+          const queuedImage = {
+            id: Date.now() + Math.random(),
+            file: this.file,
+            addedAt: new Date(),
+            status: 'queued'
+          };
+          this.queuedImages.push(queuedImage);
+          this.file = null;
+          console.log('Added image to queue; active=', this.activeTranslationCount, 'max=', this.maxConcurrent);
+          this.fillTranslationSlots();
         },
 
 
 
         // Process translation for a specific queued image
         async processTranslation(queuedImage) {
-          this.uploadController?.abort();
-          this.uploadController = new AbortController();
-
-          // Reset translation state for new translation
-          this.currentFolder = null;
-          this.finalPngDisplayed = false;
-          this.useFileResult = true;
+          const abortController = new AbortController();
+          queuedImage.abortController = abortController;
+          queuedImage.currentFolder = null;
+          queuedImage.finalPngDisplayed = false;
           
-          console.log("Started new translation, reset currentFolder to null");
-
-          // Status is already set correctly in startTranslation, no need to change it here
+          console.log("Started translation for", queuedImage.id);
 
           let buffer = new Uint8Array();
 
@@ -1259,7 +1248,7 @@
               switch (statusCode) {
                 case 0:
                   // 如果已经显示了final.png文件，忽略占位符数据
-                  if (this.finalPngDisplayed) {
+                  if (queuedImage.finalPngDisplayed) {
                     console.log("已显示final.png，忽略占位符数据");
                     break;
                   }
@@ -1271,6 +1260,7 @@
                       result: new Blob([data], { type: "image/png" }),
                       status: 'finished'
                     };
+                    this.fillTranslationSlots();
                   }
                   // 在文件模式下，依赖 final_ready 消息来更新 UI
                   break;
@@ -1279,27 +1269,26 @@
 
                   // 检查是否是rendering_folder消息
                   if (newStatus.startsWith("rendering_folder:")) {
-                    this.currentFolder = newStatus.substring(17); // 移除"rendering_folder:"前缀
-                    console.log("收到文件夹信息:", this.currentFolder);
+                    const folder = newStatus.substring(17);
+                    queuedImage.currentFolder = folder;
+                    this.currentFolder = folder; // keep legacy preview in sync with latest
+                    console.log("收到文件夹信息:", folder, "for", queuedImage.id);
                   } else if (newStatus.startsWith("final_ready:")) {
                     // final.png已就绪，立即显示
-                    const readyFolder = newStatus.substring(12); // 移除"final_ready:"前缀
-                    console.log("final.png已就绪，文件夹:", readyFolder);
-                    
-                    // Ensure currentFolder is set
-                    if (!this.currentFolder) {
-                      this.currentFolder = readyFolder;
-                      console.log("Set currentFolder from final_ready:", this.currentFolder);
-                    }
-                    
-                    this.showFinalResult();
+                    const readyFolder = newStatus.substring(12);
+                    console.log("final.png已就绪，文件夹:", readyFolder, "for", queuedImage.id);
+                    queuedImage.currentFolder = readyFolder || queuedImage.currentFolder;
+                    this.showFinalResult(queuedImage, queuedImage.currentFolder);
                   } else if (processingItemIndex !== -1) {
                     // Update the processing item status and progress using Vue reactivity
                     console.log('Updating status for queued image:', queuedImage.id, 'to:', newStatus);
                     this.queuedImages[processingItemIndex] = {
                       ...this.queuedImages[processingItemIndex],
                       status: newStatus,
-                      progress: newStatus
+                      progress: newStatus,
+                      abortController: abortController,
+                      currentFolder: queuedImage.currentFolder,
+                      finalPngDisplayed: queuedImage.finalPngDisplayed
                     };
                   }
                   break;
@@ -1346,7 +1335,7 @@
                 {
                   method: "POST",
                   body: formData,
-                  signal: this.uploadController.signal,
+                  signal: abortController.signal,
                 }
               );
 
@@ -1359,6 +1348,7 @@
                     error: "Upload failed"
                   };
                 }
+                this.fillTranslationSlots();
                 return;
               }
 
@@ -1371,7 +1361,7 @@
 
             } catch (error) {
               if (error.name === 'AbortError') {
-                console.log('Fetch aborted');
+                console.log('Fetch aborted for', queuedImage.id);
                 return;
               }
               console.error(error);
@@ -1383,6 +1373,7 @@
                   error: "Connection error"
                 };
               }
+              this.fillTranslationSlots();
             }
           };
 
@@ -1462,85 +1453,53 @@
 
 
 
-        // 显示final.png结果
-        showFinalResult() {
-          console.log("final.png已就绪，立即显示");
-          console.log("Current folder:", this.currentFolder);
+        // 显示final.png结果（按单页 id，支持并发达成）
+        showFinalResult(queuedImage, folder) {
+          const resultFolder = folder || queuedImage?.currentFolder || this.currentFolder;
+          console.log("final.png已就绪，立即显示", queuedImage?.id, resultFolder);
 
-          // 标记已显示final.png，后续占位符数据将被忽略
-          this.finalPngDisplayed = true;
-
-          // Find the item that was just processed - it might already be 'finished' or still processing
-          // Look for the first item that's not 'queued' (either 'finished' or still processing)
-          const processingItemIndex = this.queuedImages.findIndex(item => 
-            item.status !== 'queued'
-          );
-          
-          console.log("Looking for processing/finished item, found at index:", processingItemIndex);
-          console.log("Current queue statuses:", this.queuedImages.map(item => ({ id: item.id, status: item.status })));
-          
-          if (processingItemIndex !== -1) {
-            const processingItem = this.queuedImages[processingItemIndex];
-            
-            // Check if currentFolder is available
-            if (!this.currentFolder) {
-              console.warn("currentFolder is null, cannot set result URL");
-              return;
-            }
-            
-            // Update the item using Vue reactivity - ensure it has the correct result URL
-            this.queuedImages[processingItemIndex] = {
-              ...processingItem,
-              status: 'finished',
-              result: `${BASE_URI}result/${this.currentFolder}/final.png`
-            };
-            
-            console.log("Updated queued image:", this.queuedImages[processingItemIndex]);
-            
-            // Add to finished images gallery
-            this.addToFinishedImages({
-              name: processingItem.file.name,
-              result: `${BASE_URI}result/${this.currentFolder}/final.png`
-            });
-            
-            // Auto-process next item in queue FIRST
-            setTimeout(() => {
-              console.log("Auto-processing next item in queue");
-              this.processNextInQueue();
-            }, 500); // Wait 500ms before processing next
-            
-            // Clear finished items from queue AFTER processing next
-            setTimeout(() => {
-              this.clearFinishedItems();
-            }, 3000); // Wait 3 seconds before clearing so user can see the finished status
-          } else {
-            console.warn("No processing item found in queue");
+          if (!queuedImage || !resultFolder) {
+            console.warn("showFinalResult missing image or folder", queuedImage?.id, resultFolder);
+            return;
           }
+
+          queuedImage.finalPngDisplayed = true;
+          this.finalPngDisplayed = true;
+          this.currentFolder = resultFolder;
+
+          const processingItemIndex = this.queuedImages.findIndex(item => item.id === queuedImage.id);
+          if (processingItemIndex === -1) {
+            console.warn("No matching queue item for", queuedImage.id);
+            return;
+          }
+
+          const processingItem = this.queuedImages[processingItemIndex];
+          this.queuedImages[processingItemIndex] = {
+            ...processingItem,
+            status: 'finished',
+            result: `${BASE_URI}result/${resultFolder}/final.png`,
+            currentFolder: resultFolder,
+            finalPngDisplayed: true
+          };
+
+          this.addToFinishedImages({
+            name: processingItem.file.name,
+            result: `${BASE_URI}result/${resultFolder}/final.png`
+          });
+
+          // Start more queued pages up to maxConcurrent
+          setTimeout(() => {
+            this.fillTranslationSlots();
+          }, 100);
+
+          setTimeout(() => {
+            this.clearFinishedItems();
+          }, 3000);
         },
 
-    // Process next item in queue
+    // Process next item in queue (kept for compatibility)
     processNextInQueue() {
-      console.log("processNextInQueue called");
-      console.log("Current queue:", this.queuedImages.map(item => ({ id: item.id, status: item.status })));
-      
-      const nextItemIndex = this.queuedImages.findIndex(item => item.status === 'queued');
-      console.log("Next queued item index:", nextItemIndex);
-      
-      if (nextItemIndex !== -1) {
-        const nextItem = this.queuedImages[nextItemIndex];
-        console.log("Found next item:", nextItem);
-        
-        // Update the item using Vue reactivity
-        this.queuedImages[nextItemIndex] = {
-          ...nextItem,
-          status: 'processing'
-        };
-        
-        console.log("Starting translation for next item:", this.queuedImages[nextItemIndex]);
-        this.processTranslation(this.queuedImages[nextItemIndex]);
-      } else {
-        console.log("No queued items to process");
-      }
+      this.fillTranslationSlots();
     },
 
     // Get current settings for saving with finished images
@@ -1791,63 +1750,57 @@
     // Skip current translation and move to next
     skipCurrentTranslation() {
       console.log('Skip current translation called');
-      console.log('Current queued images:', this.queuedImages);
-      
-      const processingItemIndex = this.queuedImages.findIndex(item => item.status === 'processing');
-      console.log('Processing item index:', processingItemIndex);
-      
+      // Skip the oldest active item
+      const processingItemIndex = this.queuedImages.findIndex(item => this.processingStatuses.includes(item.status));
+
       if (processingItemIndex !== -1) {
         const processingItem = this.queuedImages[processingItemIndex];
-        console.log('Found processing item:', processingItem);
-        
-        // Abort current translation
-        this.uploadController?.abort();
-        console.log('Aborted upload controller');
-        
-        // Mark current item as skipped/error
+        processingItem.abortController?.abort();
+
         this.queuedImages[processingItemIndex] = {
           ...processingItem,
           status: 'error',
           error: 'Skipped by user'
         };
-        
-        console.log('Marked item as skipped');
-        
-        // Clear finished/error items and move to next
+
         setTimeout(() => {
           this.clearFinishedItems();
-          this.processNextInQueue();
-        }, 1000);
-      } else {
+          this.fillTranslationSlots();
+        }, 300);
       }
+    },
+
+    onMaxConcurrentChange() {
+      const n = Math.max(1, Math.min(4, Number(this.maxConcurrent) || 1));
+      this.maxConcurrent = n;
+      localStorage.setItem('manga-translator-max-concurrent', String(n));
+      this.fillTranslationSlots();
     },
 
     // Manually mark an item as finished (for testing)
     markAsFinished(id) {
       const item = this.queuedImages.find(img => img.id === id);
-      if (item && item.status === 'processing') {
+      if (item && this.processingStatuses.includes(item.status)) {
         const itemIndex = this.queuedImages.findIndex(img => img.id === id);
+        const folder = item.currentFolder || this.currentFolder || 'test';
         this.queuedImages[itemIndex] = {
           ...item,
           status: 'finished',
-          result: `${BASE_URI}result/${this.currentFolder || 'test'}/final.png`
+          result: `${BASE_URI}result/${folder}/final.png`
         };
         
-        // Add to finished images gallery
         this.addToFinishedImages({
           name: item.file.name,
-          result: `${BASE_URI}result/${this.currentFolder || 'test'}/final.png`
+          result: `${BASE_URI}result/${folder}/final.png`
         });
         
-        // Clear finished items from queue after a delay
         setTimeout(() => {
           this.clearFinishedItems();
         }, 2000);
         
-        // Auto-process next item in queue
         setTimeout(() => {
-          this.processNextInQueue();
-        }, 1000);
+          this.fillTranslationSlots();
+        }, 300);
       }
     },
 

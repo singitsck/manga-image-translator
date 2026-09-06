@@ -1,6 +1,6 @@
 # 對應 start-lmstudio-local.sh 的 Docker 版
 # 主翻譯：MiniMax（.env）
-# Fallback：主機上的 LM Studio（host.docker.internal:1234）
+# Fallback：主機上的 LM Studio（host.docker.internal，埠見 OPENAI_FALLBACK_PORT）
 #
 # 啟動前：
 #   1. 專案根目錄有 .env（MiniMax key / model）
@@ -27,6 +27,7 @@ services:
       --port=5003
       --nonce None
       --context-size ${CONTEXT_SIZE:-5}
+      --num-workers ${NUM_WORKERS:-2}
     env_file:
       - ../../.env
     volumes:
@@ -39,6 +40,7 @@ services:
       - ../../server/main.py:/app/server/main.py
       - ../../server/args.py:/app/server/args.py
       - ../../server/request_extraction.py:/app/server/request_extraction.py
+      - ../../server/index.html:/app/server/index.html
     ports:
       - 5003:5003
     ipc: host
@@ -47,8 +49,9 @@ services:
     environment:
       MT_WEB_NONCE: "None"
       # 覆蓋 .env 裡的 127.0.0.1：容器內必須用 host.docker.internal 連主機 LM Studio
-      OPENAI_FALLBACK_API_BASE: "http://host.docker.internal:1234/v1"
+      OPENAI_FALLBACK_API_BASE: "http://host.docker.internal:${OPENAI_FALLBACK_PORT:-4321}/v1"
       OPENAI_FALLBACK_API_KEY: "lm-studio"
-      OPENAI_FALLBACK_MODEL: "${OPENAI_FALLBACK_MODEL:-qwen2.5-7b-instruct-uncensored}"
+      OPENAI_FALLBACK_MODEL: "${OPENAI_FALLBACK_MODEL:-sakura-14b-qwen2.5-v1.0}"
       SKIP_LANG: "${SKIP_LANG:-CHS,CHT}"
       CONTEXT_SIZE: "${CONTEXT_SIZE:-5}"
+      NUM_WORKERS: "${NUM_WORKERS:-2}"
