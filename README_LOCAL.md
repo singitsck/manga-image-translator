@@ -171,6 +171,33 @@ INFO: Uvicorn running on http://0.0.0.0:5003
 
 容器內會把 `OPENAI_FALLBACK_API_BASE` 覆寫為 `http://host.docker.internal:1234/v1`，以連回主機上的 LM Studio。
 
+### GCP 雲端部署（GPU VM）
+
+專案內含一鍵腳本 `deploy/gcp/deploy.sh`，會在 **Google Compute Engine** 建立帶 **NVIDIA T4** 的 Ubuntu VM，並以 Docker 啟動 API（埠 `5003`）。
+
+**前置：**
+
+1. 安裝並登入 [gcloud CLI](https://cloud.google.com/sdk/docs/install)
+2. GCP 專案已啟用計費，且區域（如 `asia-east1-b`）有 GPU 配額
+3. 專案根目錄已有 `.env`（可參考 `deploy/gcp/env.gcp.example`）
+
+**部署：**
+
+```bash
+export GCP_PROJECT_ID=你的專案ID
+export GCP_ZONE=asia-east1-b   # 依配額調整
+./deploy/gcp/deploy.sh
+```
+
+**拆除：**
+
+```bash
+export GCP_PROJECT_ID=你的專案ID
+./deploy/gcp/teardown.sh
+```
+
+GCP 上通常**沒有本機 LM Studio**；主翻譯仍走 MiniMax API，影像偵測／OCR／修圖在 VM GPU 上執行。若需 fallback，可在 `deploy/gcp/docker-compose-gcp-gpu.yml` 啟用 Ollama sidecar。
+
 ---
 
 ## 程式改動說明

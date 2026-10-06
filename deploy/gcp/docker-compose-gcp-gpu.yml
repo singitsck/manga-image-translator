@@ -1,0 +1,60 @@
+# GCP GPU VM 用：含本 fork 自訂掛載，主翻譯走 MiniMax API
+# 在 VM 上由 vm-startup.sh 以 repo 根目錄為 context 啟動
+
+services:
+  manga_image_translator:
+    image: ${MIT_IMAGE:-zyddnys/manga-image-translator:main}
+    container_name: manga_image_translator_gcp
+    restart: unless-stopped
+    entrypoint: python
+    command: >
+      server/main.py
+      --verbose
+      --start-instance
+      --host=0.0.0.0
+      --port=5003
+      --use-gpu
+      --nonce None
+      --context-size ${CONTEXT_SIZE:-5}
+    env_file:
+      - .env
+    volumes:
+      - ./result:/app/result
+      - ./dict:/app/dict
+      - ./manga_translator/mode/share.py:/app/manga_translator/mode/share.py
+      - ./manga_translator/translators/chatgpt.py:/app/manga_translator/translators/chatgpt.py
+      - ./manga_translator/detection/__init__.py:/app/manga_translator/detection/__init__.py
+      - ./server/main.py:/app/server/main.py
+      - ./server/args.py:/app/server/args.py
+      - ./server/request_extraction.py:/app/server/request_extraction.py
+    ports:
+      - "5003:5003"
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      MT_WEB_NONCE: "None"
+      SKIP_LANG: "${SKIP_LANG:-CHS,CHT}"
+      CONTEXT_SIZE: "${CONTEXT_SIZE:-5}"
+
+  # 可選：VM 內 Ollama 作為 MiniMax 拒答時的 fallback（需額外 GPU 記憶體）
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+
+# volumes:
+#   ollama_data:
