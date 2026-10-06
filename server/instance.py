@@ -15,21 +15,44 @@ class ExecutorInstance(BaseModel):
     def free_executor(self):
         self.busy = False
 
+    def _nonce_headers(self):
+        # 必須用模組屬性讀取，避免 from-import 拿到啟動當下的舊值
+        try:
+            import server.main as web_main
+            web_nonce = getattr(web_main, "nonce", None)
+        except Exception:
+            web_nonce = None
+        if web_nonce and web_nonce != "None":
+            return {"X-Nonce": str(web_nonce)}
+        return {}
+
     async def sent(self, image: Image, config: Config):
-        return await fetch_data("http://"+self.ip+":"+str(self.port)+"/simple_execute/translate", image, config)
+        return await fetch_data(
+            "http://"+self.ip+":"+str(self.port)+"/simple_execute/translate",
+            image, config, headers=self._nonce_headers(),
+        )
 
     async def sent_stream(self, image: Image, config: Config, sender: NotifyType):
-        await fetch_data_stream("http://"+self.ip+":"+str(self.port)+"/execute/translate", image, config, sender)
+        await fetch_data_stream(
+            "http://"+self.ip+":"+str(self.port)+"/execute/translate",
+            image, config, sender, headers=self._nonce_headers(),
+        )
 
     async def sent_batch(self, images: List[Image.Image], config: Config, batch_size: int):
         """发送批量翻译请求"""
-        return await fetch_data("http://"+self.ip+":"+str(self.port)+"/simple_execute/translate_batch", 
-                               {"images": images, "config": config, "batch_size": batch_size})
+        return await fetch_data(
+            "http://"+self.ip+":"+str(self.port)+"/simple_execute/translate_batch",
+            {"images": images, "config": config, "batch_size": batch_size},
+            headers=self._nonce_headers(),
+        )
 
     async def sent_batch_stream(self, images: List[Image.Image], config: Config, batch_size: int, sender: NotifyType):
         """发送批量翻译流式请求"""
-        await fetch_data_stream("http://"+self.ip+":"+str(self.port)+"/execute/translate_batch",
-                               {"images": images, "config": config, "batch_size": batch_size}, config, sender)
+        await fetch_data_stream(
+            "http://"+self.ip+":"+str(self.port)+"/execute/translate_batch",
+            {"images": images, "config": config, "batch_size": batch_size},
+            config, sender, headers=self._nonce_headers(),
+        )
 
 class Executors:
     def __init__(self):
